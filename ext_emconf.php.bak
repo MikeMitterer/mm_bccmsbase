@@ -1,0 +1,49 @@
+<?php
+
+########################################################################
+# Extension Manager/Repository config file for ext: "mm_bccmsbase"
+#
+# Auto generated 09-06-2006 17:18
+#
+# Manual updates:
+# Only the data in the array - anything else is removed by next write.
+# "version" and "dependencies" must not be touched!
+########################################################################
+
+$EM_CONF[$_EXTKEY] = array(
+	'title' => 'MM ECL - ExtensionClassLibrary',
+	'description' => 'Baseclasses for Extensions. Mainly use bei the mm_ extensions',
+	'category' => 'fe',
+	'shy' => 0,
+	'dependencies' => '',
+	'conflicts' => '',
+	'priority' => '',
+	'loadOrder' => '',
+	'module' => '',
+	'state' => 'beta',
+	'internal' => 0,
+	'uploadfolder' => 0,
+	'createDirs' => '',
+	'modify_tables' => '',
+	'clearCacheOnLoad' => 0,
+	'lockType' => '',
+	'author' => 'Mike Mitterer',
+	'author_email' => 'office@bitcon.at',
+	'author_company' => '',
+	'CGLcompliance' => '',
+	'CGLcompliance_note' => '',
+	'version' => '0.2.0',
+	'_md5_values_when_last_written' => 'a:20:{s:9:"ChangeLog";s:4:"124e";s:10:"README.txt";s:4:"ee2d";s:18:"ext_emconf.php.bak";s:4:"c212";s:12:"ext_icon.gif";s:4:"5867";s:14:"doc/manual.sxw";s:4:"33e0";s:19:"doc/wizard_form.dat";s:4:"9d69";s:20:"doc/wizard_form.html";s:4:"a026";s:17:"phphelper/zip.php";s:4:"88ef";s:21:"phphelper/zip.php.bak";s:4:"136c";s:33:"lib/class.mmlib_bcextfilefunc.php";s:4:"d5a1";s:37:"lib/class.mmlib_bcextfilefunc.php.bak";s:4:"ec9b";s:25:"lib/class.mmlib_crypt.php";s:4:"735b";s:29:"lib/class.mmlib_crypt.php.bak";s:4:"4a54";s:31:"lib/class.mmlib_extfrontend.php";s:4:"9637";s:45:"lib/class.mmlib_extfrontend.php-backup_060119";s:4:"1ff7";s:35:"lib/class.mmlib_extfrontend.php.bak";s:4:"dcd0";s:32:"lib/class.mmlib_filehandling.php";s:4:"5ab9";s:36:"lib/class.mmlib_filehandling.php.bak";s:4:"7b15";s:23:"lib/class.mmlib_log.php";s:4:"5a85";s:27:"lib/class.mmlib_log.php.bak";s:4:"d16e";}',
+	'constraints' => array(
+		'depends' => array(
+			'php' => '3.0.0-',
+			'typo3' => '3.5.0-',
+		),
+		'conflicts' => array(
+		),
+		'suggests' => array(
+		),
+	),
+);
+
+?>

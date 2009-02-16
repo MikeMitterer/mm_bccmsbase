@@ -1,0 +1,1141 @@
+<?php
+/***************************************************************
+*  Copyright notice
+*
+*  (c) 2005 Mike Mitterer (mike.mitterer@bitcon.at)
+*  All rights reserved
+*
+*  This script is part of the TYPO3 project. The TYPO3 project is
+*  free software; you can redistribute it and/or modify
+*  it under the terms of the GNU General Public License as published by
+*  the Free Software Foundation; either version 2 of the License, or
+*  (at your option) any later version.
+*
+*  The GNU General Public License can be found at
+*  http://www.gnu.org/copyleft/gpl.html.
+*
+*  This script is distributed in the hope that it will be useful,
+*  but WITHOUT ANY WARRANTY; without even the implied warranty of
+*  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*  GNU General Public License for more details.
+*
+*  This copyright notice MUST APPEAR in all copies of the script!
+***************************************************************/
+
+/**
+ * Baseclass for various extensions. Makes live easier for me.
+ *
+ * @author	Mike Mitterer <mike.mitterer@bitcon.at>
+ */
+ 
+class mmlib_extfrontend extends tslib_pibase
+	{
+	var $_dummyFieldList 	= null;
+	var	$_objUserAuth			= null;
+	var $_uploadFolder;
+
+	/**
+	 * Gets the language for the module, makes the initialisation for the PID data,
+	 * get information about the logged in user aso.
+	 *
+	 * @param	[array]		$conf: This array comes from the main-function and represents the values from the TS-Field and from setup.txt
+	 * @param	[string]	$currentTableName: Holds the plugin tablename. Example: tx_dam
+	 * @param	[string]	$uploadFolder: Name of the plugin-specific uploadfolder. Example: tx_mmdamfilelist
+	 * @return	[void]
+	 */
+	function init($conf,$currentTableName,$uploadFolder)
+		{
+		$this->conf 					= $conf;					// Setting the TypoScript passed to this function in $this->conf
+		$this->_uploadFolder 	= $uploadFolder;	// Example: tx_mmreflist
+
+		// To find out more about T3...
+		//debug($GLOBALS);
+		//debug($this->piVars);
+		//debug($this->conf["basegroupname"]);
+		//debug($GLOBALS["TSFE"]->fe_user->groupData['title'][2]);
+		//debug($GLOBALS["TSFE"]->fe_user);
+		//debug($this->conf);
+
+		// Preconfigure the typolink (For future Versions)
+    $this->local_cObj = t3lib_div::makeInstance("tslib_cObj");
+    $this->local_cObj->setCurrentVal($GLOBALS["TSFE"]->id);
+    $this->typolink_conf = $this->conf["typolink."];
+    $this->typolink_conf["parameter."]["current"] = 1;
+    $this->typolink_conf["additionalParams"] = $this->cObj->stdWrap($this->typolink_conf["additionalParams"],$this->typolink_conf["additionalParams."]);
+    //unset($this->typolink_conf["additionalParams."]);
+
+    // Configure caching
+    $this->allowCaching = $this->conf["allowCaching"] ? 1 : 0;
+    if (!$this->allowCaching) $GLOBALS["TSFE"]->set_no_cache();
+
+
+		// Set the language
+		// You can set the language like this: plugin.tx_<pluginname>_pi1.language = de
+		// or with the global Setup: config.language = de
+
+		// sys_language_mode defines what to do if the requested translation is not found
+		$this->sys_language_mode = $this->conf['sys_language_mode'] ? $this->conf['sys_language_mode'] : $GLOBALS['TSFE']->sys_language_mode;
+		$defaultLanguage = $GLOBALS['TSFE']->config['config']['language'] ? $GLOBALS['TSFE']->config['config']['language'] : $this->sys_language_mode; // Früher: 'default';
+		$this->LLkey = ($this->conf["language"] ? $this->conf["language"] : $defaultLanguage);
+
+		// Load Backend-Lables
+		// check if the $GLOBALS["LANG"]-object is available - if not, load it
+		// You can get the BackendLable with $this->getBL(...)
+		if (!is_callable($this->internal['BACKEND_LANG']->sL))
+			{
+			require_once(t3lib_extMgm::extPath('lang').'lang.php');
+
+			$this->internal['BACKEND_LANG'] = t3lib_div::makeInstance('language');
+			$this->internal['BACKEND_LANG']->lang = $this->LLkey;
+			//debug($this->internal['BACKEND_LANG']->sL('LLL:EXT:mm_propman/locallang_db.php:tx_mmpropman_data.previewimage'));
+			}
+
+		// Save the current Table Name
+		$this->setTableName($currentTableName);
+
+		// With this you can get the data for example from a SysFolder
+		$this->initPIDList();
+
+		// If a FE-User is logged in - get that information
+		$this->initUserAuth();
+		}
+
+	/**
+	 * Looks for UIDs in the $nameForeignTable.
+	 *
+	 * @param	[string]		$UIDFieldInContentTable: Name of the field in the content-table where the UIDs are stored
+	 * @param	[string]		$nameForeignTable: In this Table there are the Data for the UIDs
+	 * @param	[string]		$fieldnameInForeignTable: Fieldname in the foreign Table where the Discription is stored
+
+	 * @return	[array]		The index of the array is the uid, the Contents of the field ist stored as array-data
+	 */
+	function getDataFromForeignTable($UIDFieldInContentTable,$nameForeignTable,$fieldnameInForeignTable)
+		{
+		// $this->cObj->data - data from the current tt_content-record
+		$conf['uidInList'] = $this->cObj->data[$UIDFieldInContentTable];
+		
+		// Here is the foreign table - Initialized by $this->initPIDList()
+		$conf['pidInList'] = $this->pid_list;
+
+		$conf['selectFields'] = $fieldnameInForeignTable . ',uid';
+
+		$SQLStatement = $this->cObj->getQuery($nameForeignTable,$conf);
+		//debug($SQLStatement);
+
+		$result = $GLOBALS['TYPO3_DB']->sql_query($SQLStatement);
+		$listdata = array();
+		while(($record = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($result)))
+			{
+			$listdata[$record['uid']] = $record[$fieldnameInForeignTable];
+			}
+
+		return $listdata;
+		}
+
+	/**
+	 * Just an example (until now (060105)) for getting the data for a MM Relation
+	 *
+	 * @param	[string]		$uidFieldFromCurrentTable: Field in the current Table where the UIDs are stored
+	 * @param	[string]		$nameMMTable: Name of the MM-Table
+	 * @param	[string]		$nameTable: Name of the foreign-table
+	 * @param	[boolean]		$fCountRecords: Count only
+	 
+	 * @return	[pointer MySQL select result pointer / DBAL object]
+	 */
+	function getMMData($uidFieldFromContentTable,$nameMMTable,$nameTable,$fCountRecords = false)
+		{
+		$nameMainTable				= $this->getTableName();
+		$uidList							= $this->internal["currentRow"][$uidFieldFromCurrentTable];
+		$SELECT_FIELDS 				= $nameMainTable . '.*,' . $nameMMTable . '.uid_foreign';
+		$WHERE_CAT 						= 'AND ' . $nameTable . '.uid IN (' . $uidList . ')';
+		$WHERE_ENABLE_FIELDS 	= $this->cObj->enableFields($nameMainTable);
+		$LIMIT 								= '';
+
+		if($fCountRecords == true)
+			{
+			$SELECT_FIELDS 	= 'count(*)';
+			}
+
+		$res = $GLOBALS['TYPO3_DB']->exec_SELECT_mm_query(
+			$SELECT_FIELDS,
+			$nameMainTable,
+			$nameMMTable,
+			$nameTable,
+			$WHERE_CAT . $WHERE_ENABLE_FIELDS,
+			'', 							//	groupBy,
+			'', 							// 	orderBy,
+			$LIMIT 						//	limit
+			);
+
+		/*
+		if($res == null)
+			{
+			debug(mysql_error());
+			debug($SELECT_FIELDS);
+			debug($WHERE_CAT . $WHERE_ENABLE_FIELDS . $strWhereStatement);
+			debug($LIMIT);
+			}
+
+		while($res != null && ($record = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($res)))
+			{
+			debug($record);
+			}
+		*/
+		
+		return $res;
+		
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$strFieldName: ...
+	 * @return	[type]		...
+	 */
+	function makeFileLink($strFieldName)
+		{
+		$aFiles = split(',',$this->internal["currentRow"][$strFieldName]);
+		$strFileLink = '';
+
+		if(!isset($aFiles[0]) || strlen($aFiles[0]) == 0) return '';
+
+		foreach($aFiles as $file)
+			{
+			$strTempFileLink = $this->cObj->filelink($aFiles[0],$this->conf['filelink.']);
+			if($strTempFileLink == '')
+				{
+				$this->conf['filelink.']['path'] = $this->conf['filelink.']['path2'];
+				$strTempFileLink = $this->cObj->filelink($file,$this->conf['filelink.']);
+				}
+			$strFileLink .= $strFileLink;
+			}
+		return $strFileLink;
+		}
+
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @return	[type]		...
+	 */
+	function getTableName()
+		{
+		if(!isset($this->internal['currentTable']) || strlen(trim($this->internal['currentTable'])) == 0)
+			{
+			$this->setTableName();
+			}
+		return $this->internal['currentTable'];
+		}
+	/**
+	 * extends the pid_list given from $conf or from $this->cObj->data recursively by the pids of the subpages
+	 * generates an array from the pagetitles of those pages
+	 *
+	 * @return	void
+	 */
+	function initPIDList() {
+		// pid_list is the pid/list of pids from where to fetch the news items.
+		$pid_list = $this->cObj->data['pages'];
+		$pid_list = $pid_list?$pid_list:
+		trim($this->cObj->stdWrap($this->conf['pid_list'], $this->conf['pid_list.']));
+		$pid_list = $pid_list ? implode(t3lib_div::intExplode(',', $pid_list), ','):$GLOBALS['TSFE']->id;
+
+		$recursive = $this->cObj->data['recursive'];
+		$recursive = is_numeric($recursive) ? $recursive:
+		$this->cObj->stdWrap($this->conf['recursive'], $this->conf['recursive.']);
+
+		// extend the pid_list by recursive levels
+		$this->pid_list = $this->pi_getPidList($pid_list, $recursive);
+		$this->pid_list = $this->pid_list?$this->pid_list:0;
+
+		$this->conf['pidList'] = $this->pid_list;
+		$this->conf['recursive'] = $recursive;
+		}
+
+	/**
+	 * Makes a new instance of the tslib_feUserAuth Object
+	 *
+	 * @return	[void]		
+	 */
+	function initUserAuth()
+		{
+		$this->_objUserAuth = t3lib_div::makeInstance('tslib_feUserAuth');
+
+		//debug($GLOBALS["TSFE"]->fe_user);
+		if(!isset($GLOBALS["TSFE"]->fe_user->user))		$this->_objUserAuth->start();
+		//debug($GLOBALS["TSFE"]->fe_user);
+
+		// If someone knows a better way to give the username to
+		// zip.php - please let me know...
+		setcookie('user',$GLOBALS["TSFE"]->fe_user->user['username']);
+			
+		return $this->_objUserAuth;
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @return	[type]		...
+	 */
+	function initLangSpecificSelectConf()
+		{
+		// Different languages in ONE SysFolder
+		// For more configuration-details look here:
+		// http://typo3.org/documentation/document-library/tt_news/Configuration-1/#oodoc_part_7405
+		// MINIFAQ ist almost the same
+
+		$currentTable = $this->getTableName();
+		// sys_language_mode == 'strict': If a certain language is requested, select only news-records from the default language which have a translation. The translated articles will be overlayed later in the list or single function.
+		// Sample: plugin.tx_cfabwwwminifaq_pi1.sys_language_mode = strict
+		if ($this->sys_language_mode == 'strict' && $GLOBALS['TSFE']->sys_language_content)
+			{
+			$aTempQueryConfig = array(
+				'selectFields' => $currentTable . '.uid', // difference to ttnews - ttnews looks for l18n_parent and does the rest later
+				'pidInList' => $this->pid_list,
+				'where' => $currentTable . '.sys_language_uid = ' . $GLOBALS['TSFE']->sys_language_content . $this->enableFields
+				);
+			$tmpres = $this->cObj->exec_getQuery($currentTable,$aTempQueryConfig);
+			$strictUids = array();
+			while ($tmprow = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($tmpres))
+				{
+				$strictUids[] = $tmprow['uid'];
+				}
+			$strStrictUids = implode(',', $strictUids);
+			// strict UID and with "-1" the "global" FAQ's
+			$selectConf['where'] .= ' (' . $currentTable . '.uid IN (' . ($strStrictUids?$strStrictUids:0) . ') OR ' . $currentTable . '.sys_language_uid=-1)';
+			}
+		else
+			{
+			// sys_language_mode != 'strict': If a certain language is requested, select only news-records in the default language. The translated articles (if they exist) will be overlayed later in the list or single function.
+			$selectConf['where'] .= ' ' . $currentTable . '.sys_language_uid IN (0,-1)';
+			}
+		$selectConf['selectFields'] = $currentTable . '.*';
+		$selectConf['pidInList'] = $this->pid_list;
+
+		return $selectConf;
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$tablename: ...
+	 * @return	[type]		...
+	 */
+	function setTableName($tablename = null)
+		{
+		if ($tablename == null)
+			{
+			list($t) = explode(":",$this->cObj->currentRecord);
+			//debug($this->cObj->data);
+			$this->internal["currentTable"] = $t;
+			}
+		else $this->internal["currentTable"] = $tablename;
+
+		return $this->internal["currentTable"];
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$strView: ...
+	 * @return	[type]		...
+	 */
+	function setInternalVars($strView)
+		{
+		$this->internal['modeselector'] = array('0' => 'Default mode');
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$strView: ...
+	 * @return	[type]		...
+	 */
+	function setInternalQueryParameters($strView)
+		{
+		$lConf = $this->conf[$strView . '.'];	// get LocalSettings
+
+		// Initializing the query parameters:
+		list($this->internal["orderBy"],$this->internal["descFlag"]) = explode(":",$this->piVars["sort"]);
+
+		$this->internal["results_at_a_time"] 	= t3lib_div::intInRange($lConf["results_at_a_time"],0,1000,3);		// Number of results to show in a listing.
+		$this->internal["maxPages"]						= t3lib_div::intInRange($lConf["maxPages"],0,1000,10);;		// The maximum number of "pages" in the browse-box: "Page 1", "Page 2", etc.
+		$this->internal["colsOnPage"]					= t3lib_div::intInRange($lConf["colsOnPage"],1,100,1);;
+		$this->internal['searchFieldList']		= $lConf['searchFieldList'];
+		$this->internal['orderByList']				= $lConf['orderByList'];
+		}
+
+	/**
+	 * Daten der BackendLanguagedatei werden abgeholt
+	 *
+	 * @param	[type]		$index: ...
+	 * @param	[type]		$subindex: ...
+	 * @return	[type]		...
+	 */
+	function getBL($index,$subindex = -1)
+		{
+		$realIndex = 'LLL:EXT:mm_propman/locallang_db.php:tx_mmpropman_data.' . $index . ($subindex != -1 ? '.I.' . $subindex : '');
+		//debug($realIndex);
+		return ($this->internal['BACKEND_LANG']->sL($realIndex));
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$templateName: ...
+	 * @return	[type]		...
+	 */
+	function _getTemplate($templateName)
+		{
+		$langKey = strtoupper($GLOBALS['TSFE']->config['config']['language']);
+		$template = $this->cObj->fileResource('EXT:' . $this->extKey . '/pi1/res/' . $templateName);
+
+		// Get language version of the help-template
+		$template_lang = '';
+		if ($langKey) {
+			$template_lang = $this->cObj->getSubpart($template, "###TEMPLATE_" . $langKey . '###');
+			}
+
+		$template = $template_lang ? $template_lang : $this->cObj->getSubpart($template, '###TEMPLATE_DEFAULT###');
+
+		// Markers and substitution:
+		//$markerArray['###CODE###'] = $this->theCode?$this->theCode:'no CODE given!';
+		return $template;
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$fieldname: ...
+	 * @param	[type]		$content: ...
+	 * @return	[type]		...
+	 */
+	function _getAutoFieldContent($fieldname,$content)
+		{
+		$confDBField = $this->conf['typodbfield.'][$fieldname . '.'];
+		//debug($nameofsetting);
+		//debug($fieldname);
+		//debug($confDBField['fieldtype']);
+
+		if(isset($confDBField) && isset($confDBField['fieldtype']))
+			{
+			// If this Content comes from DAM then set the right filepath
+			if($this->getTableName() == 'tx_dam' && !isset($confDBField['path']))
+				{
+				$confDBField['path'] = $this->internal["currentRow"]['file_path'];
+				}
+
+			switch($confDBField['fieldtype'])
+				{
+				case 'image':
+					$content = $this->_getImageContent($fieldname,$content,$confDBField);
+					break;
+				case 'link':
+					$content = $this->_getLinkContent($fieldname,$content,$confDBField);
+					break;
+				case 'filelink':
+					$content = $this->_getFileLinkContent($fieldname,$content,$confDBField);
+					break;
+				case 'stdwrap':
+					$content = $strIMG = $this->cObj->stdWrap($content,$confDBField);
+					break;
+				}
+			}
+		return $content;
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$fieldname: ...
+	 * @param	[type]		$content: ...
+	 * @param	[type]		$confDBField: ...
+	 * @return	[type]		...
+	 */
+	function _getImageContent($fieldname,$content,$confDBField)
+		{
+		$aImages = split(',',$content);
+
+		if(!isset($aImages[0]) || strlen($aImages[0]) == 0) return '';
+
+		$strContent = '';
+		$nCounter = 0;
+		foreach($aImages as $image)
+			{
+			$img = $confDBField;
+
+			if(!isset($confDBField['path'])) $confDBField['path'] = 'uploads/' . $this->_uploadFolder . '/';
+			$img["file"] = $confDBField['path'] . $image;
+
+			if(isset($confDBField['secure']) && $confDBField['secure'] == 1)
+				{
+				$targetPath = 'uploads/' . $this->_uploadFolder . '/';
+				//$targetPath = 'typo3temp/pics/' ;
+
+				$imgSource = $confDBField['path'] . $image;
+				$imgTarget = 'typo3temp/pics/' . $this->_getSecureFilename($image);
+				$imgTarget =  $targetPath . $this->_getSecureFilename($image);
+				//$cmd['data'] = PATH_site . $imgSource;
+				//$cmd['target'] = 'uploads/' . $this->_uploadFolder . '/';
+				//$cmd['altName'] = false;
+
+				if(!file_exists(PATH_site . $imgTarget))
+					{
+					if(!copy(PATH_site . $imgSource,PATH_site . $imgTarget)) die("Copy failed - SRC: $imgSource, TARGET: $imgTarget");
+
+					//global $FILEMOUNTS, $TYPO3_CONF_VARS,$BE_USER;
+					//$file = t3lib_div::makeInstance('t3lib_extFileFunctions');
+					//$file->init($FILEMOUNTS, $TYPO3_CONF_VARS['BE']['fileExtensions']);
+					//$file->init_actionPerms($BE_USER->user['fileoper_perms']);
+
+					//$ret = $file->func_copy($cmd);
+					//debug($BE_USER);
+					//debug($TYPO3_CONF_VARS['BE']['fileExtensions']);
+					}
+				$img["file"] = $targetPath  . $this->_getSecureFilename($image);
+				}
+			//debug($GLOBALS["TSFE"]->fe_user->getKey("ses","image"));
+			//$GLOBALS["TSFE"]->fe_user->setKey("ses","image", $img);
+			//debug(session_id());
+
+			//srand ((double)microtime()*1000000);
+			//$randval = rand();
+			//debug($randval);
+			//$randval = rand();
+			//setcookie ("TestCookie", $randval);
+			//debug("CO" . $_COOKIE['PHPSESSID']);
+
+			//debug($img);
+			$strIMG = $this->cObj->IMAGE($img);
+
+			$strContent .= ('<span' . $this->pi_classParam('image ' . $this->pi_getClassName('image-' . $nCounter)) . '>' .
+				$strIMG . '</span>');
+
+			$nCounter++;
+			}
+
+		return $strContent;
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$fieldname: ...
+	 * @param	[type]		$content: ...
+	 * @param	[type]		$confDBField: ...
+	 * @return	[type]		...
+	 */
+	function _getLinkContent($fieldname,$content,$confDBField)
+		{
+		$isEMail = (strstr($content,'@') == true);
+		$isPage = (preg_match('#\d+#',$content) == true);
+
+		$strContent = $content;
+		if($isEMail && strstr($content,'mailto:') == false)
+			{
+			$confDBField['makelinks'] = 1;
+
+			$strContent = 'mailto:' . $content;
+			$strContent = $this->cObj->parseFunc($strContent,$confDBField);
+			}
+		else if($isPage)
+			{
+			$confDBField['makelinks'] = 1;
+			$confDBField['parameter'] = $strContent;
+			$strContent = $this->cObj->typoLink($this->pi_getLL("continue_on_page","more..."),$confDBField);
+			}
+		else
+			{
+			$confDBField['makelinks'] = 1;
+			$confDBField['protocol'] = isset($confDBField['protocol']) ? $confDBField['protocol'] : 'http://';
+
+			$strTarget = '_top';
+			$strLink = $content;
+			if(preg_match('#(.*\.\D{2,4})/(.*)#',$content,$aTreffer))
+				{
+				$strLink 		= $aTreffer[1];
+				$strTarget 	= $aTreffer[2];
+				}
+			if(strstr($strLink,$confDBField['protocol']) == false)
+				{
+				$strLink = $confDBField['protocol'] . $strLink;
+				}
+
+			$confDBField['http']['extTarget'] = $strTarget;
+			$strContent = $this->cObj->parseFunc($strLink,$confDBField);
+			}
+
+		return $strContent;
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$fieldname: ...
+	 * @param	[type]		$content: ...
+	 * @param	[type]		$confDBField: ...
+	 * @return	[type]		...
+	 */
+	function _getFileLinkContent($fieldname,$content,$confDBField)
+		{
+		$aPDFFiles 		= split(',',$content);
+		$strContent 	= '';
+
+		if(!isset($aPDFFiles[0]) || strlen($aPDFFiles[0]) == 0) return $strContent;
+
+		$confDBField['path'] = str_replace('$pluginname',$this->_uploadFolder,$confDBField['path']);
+		$confDBField['makelinks'] = 1;
+		foreach($aPDFFiles as $file)
+			{
+			$strFileLink 	= '';
+			//$confDBField['labelStdWrap']['data'] = "TEst";
+
+			$strFileLink = $this->cObj->filelink($file,$confDBField);
+			if($strFileLink == '')
+				{
+				$confDBField['path'] = $confDBField['path2'];
+				$strFileLink = $this->cObj->filelink($file,$confDBField);
+				}
+			$strContent .= $strFileLink;
+			debug($confDBField);
+			debug($strContent . $file);
+			}
+		return $strContent;
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$imageName: ...
+	 * @return	[type]		...
+	 */
+	function _getSecureFilename($imageName)
+		{
+		$aFileName = t3lib_div::split_fileref($imageName);
+		$aFileName['filebody'] = rawurlencode(t3lib_div::shortMD5($aFileName['filebody']));
+
+		return $aFileName['path'] . $aFileName['filebody'] . '.' .  $aFileName['fileext'];
+		}
+/*
+Wird von pi_list_makelist aufgerufen
+*/
+	function getColContents($nTableRowNumber,$fGetEmptyContents = false)	{
+		$strTemplateName	= $this->_getTemplateName('listView');;
+		$editPanel 				= $this->pi_getEditPanel();
+
+		if ($editPanel)	$editPanel="<TD>".$editPanel."</TD>";
+
+		foreach($this->internal["currentRow"] as $key => $value)
+			{
+			$markerArray['###' .  strtoupper($key) . '_CLASS###']	= $this->pi_classParam($key);
+
+			$markerArray['###' .  strtoupper($key) . '###']	= '<span'.$this->pi_classParam($key).'>' .
+				($fGetEmptyContents == false ? $this->getFieldContent($key) : '') . '</span>';
+			}
+
+		$markerArray['###SUBTABLE1CLASS###'] 	= $this->pi_classParam("subtable1");
+		$markerArray['###SUBTABLE2CLASS###'] 	= $this->pi_classParam("subtable2");
+		$markerArray['###SUBTABLE3CLASS###'] 	= $this->pi_classParam("subtable3");
+
+		$markerArray['###FOOTERCLASS###']			= $this->pi_classParam('listView-footer');
+
+		$markerArray['###EDITPANEL###'] 			= $editPanel;
+
+
+		//---------------------------------
+		$template 				= $this->_getTemplate($strTemplateName);
+		$templateFieldCol = $this->cObj->getSubpart($template,'###LIST_COL###');
+
+		return $this->cObj->substituteMarkerArray($templateFieldCol,$markerArray);
+	}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$res: ...
+	 * @param	[type]		$tableParams: ...
+	 * @return	[type]		...
+	 */
+function pi_list_makelist($res,$tableParams='')
+			{
+			$strTemplateName	= $this->_getTemplateName('listView');;
+
+			// Make list table header:
+			$tRows = array();
+			$this->internal['currentRow']='';
+			$tRows[] = $this->pi_list_header();
+
+			$template 				= $this->_getTemplate($strTemplateName);
+			$templateFieldRow = $this->cObj->getSubpart($template,'###LIST_ROW###');
+
+			// Make list table rows
+			$nNumberOfCols = $this->internal["colsOnPage"];
+			$nTableRowNumber = 0;
+			$nTableColCounter = 0;
+			$nDBRowCounter = 0;
+			$tempRow = '';
+			$tempFieldList = null;
+
+			$this->resetData();
+			while($this->internal['currentRow'] = $this->fetchData($res))
+				{
+				$markerArray['###ROWCLASS###'] 			= ($nTableRowNumber % 2 ? $this->pi_classParam("listrow-odd") : $this->pi_classParam("listrow-even"));
+				$markerArray['###ROWCLASS2###'] 		= ($nTableRowNumber % 2 ? $this->pi_classParam("listrow2-odd") : $this->pi_classParam("listrow2-even"));
+
+				$tempRow .= $this->getColContents($nDBRowCounter);
+				$nTableColCounter++;
+				$nDBRowCounter++;
+
+				// Save the fieldnames for finishing the table-cols (save the array-fields)
+				if($tempFieldList == null) $tempFieldList = $this->internal['currentRow'];
+
+				if($nTableColCounter >= $nNumberOfCols)
+					{
+					$templateRow = $this->cObj->substituteMarkerArray($templateFieldRow,$markerArray);
+					$tRows[] = $this->cObj->substituteSubpart($templateRow,'###LIST_COL###',$tempRow);
+
+					$tempRow = '';
+					$nTableColCounter = 0;
+					$nTableRowNumber++;
+					}
+				}
+
+			// Finish Table Structure
+			if($nTableColCounter < $nNumberOfCols && $nTableColCounter != 0)
+				{
+				$this->internal['currentRow'] = $tempFieldList;
+				for(;$nTableColCounter < $nNumberOfCols;$nTableColCounter++)
+					{
+					$tempRow .= $this->getColContents($nDBRowCounter++,true); // true - means empty value in Array-Structure
+
+					$templateRow = $this->cObj->substituteMarkerArray($templateFieldRow,$markerArray);
+					$tRows[] = $this->cObj->substituteSubpart($templateRow,'###LIST_COL###',$tempRow);
+					}
+				}
+
+			$out = '
+			<!--
+			Record list:
+			-->
+			<div'.$this->pi_classParam('listrow').'>
+			<'.trim('table '.$tableParams).'>
+			 '.implode('',$tRows).'
+			</table>
+			</div>';
+
+			return $out;
+			}
+
+/*
+Wird von pi_list_makelist aufgerufen
+*/
+function pi_list_header()	{
+		$lConf 						= $this->conf["listView."];
+		$strTemplateName	= $this->_getTemplateName('listView');;
+
+		// Header soll nicht angezeigt werden
+		if(isset($lConf['showHeader']) && $lConf['showHeader'] == 0) return '';
+
+		$aFields 					= $GLOBALS['TYPO3_DB']->admin_get_fields($this->getTableName());
+
+		foreach($aFields as $key=>$value)
+			{
+			$markerArray['###HEADER_' .  strtoupper($key) . '###']	= '<div'.$this->pi_classParam('header_' . $key).'>' .
+				$this->getFieldHeader($key) . '</div>';
+			}
+		$markerArray['###HEADERCLASS###'] = $this->pi_classParam("listheader");
+
+		$template = $this->_getTemplate($strTemplateName);
+		$templateHeader = $this->cObj->getSubpart($template,'###LIST_HEADER###');
+
+		$strOutput = $this->cObj->substituteMarkerArray($templateHeader,$markerArray);
+		//debug($strOutput);
+
+		return $strOutput;
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$strView: ...
+	 * @return	[type]		...
+	 */
+	function _getTemplateName($strView)
+		{
+		$lConf 						= $this->conf[$strView . '.'];
+		$strTemplateName	= ($lConf["templateFile"] ? $lConf["templateFile"] : 'list_view.tmpl');
+
+		return $strTemplateName;
+		}
+
+	/*
+	Adds the dummyfields from TS to the current Recordset
+	*/
+	function fetchData($res)
+		{
+		$data = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($res);
+		if($data != null && $this->_dummyFieldList != null)
+			{
+			foreach($this->_dummyFieldList as $key => $value)
+				{
+				if(!isset($data[$key]))
+					{
+					$data[$key] = $value;
+					}
+				}
+			}
+
+		return $data;
+		}
+
+	/*
+	Generate additionals Fields for the recordset
+	*/
+	function resetData()
+		{
+		$this->_dummyFieldList 	= null;
+		$lConf									= $this->conf['typodbfield.'];
+
+		$aDummyFields = isset($lConf['dummyfieldlist']) ? explode(',',$lConf['dummyfieldlist']) : null;
+
+		if($aDummyFields != null)
+			{
+			foreach($aDummyFields as $fieldname)
+				{
+				$value = '';
+				if(isset($lConf[$fieldname . '.']['value'])) $value = $lConf[$fieldname . '.']['value'];
+				/*
+				if(!isset($this->conf['typodbfield'][$fieldname]['fieldtype'])
+					{
+					$this->conf['typodbfield'][$fieldname]['fieldtype'] = 'stdwrap';
+					}
+				*/
+				$this->_dummyFieldList[$fieldname] = $value;
+				}
+			}
+		}
+
+	/**
+	 * [Put your description here]
+	 *
+	 * @param	[type]		$fieldname: ...
+	 * @return	[type]		...
+	 */
+	function getFieldContent($fieldname)	{
+		//debug($fieldname);
+
+		switch($fieldname) {
+			case 'uid':
+				return $this->pi_list_linkSingle($this->internal['currentRow'][$fieldname],$this->internal['currentRow']['uid'],1);	// The "1" means that the display of single items is CACHED! Set to zero to disable caching.
+			break;
+
+			default:
+				return $this->_getAutoFieldContent($fieldname,$this->internal['currentRow'][$fieldname]);
+			break;
+		}
+	}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$fieldName: ...
+	 * @return	[type]		...
+	 */
+	function getSingleViewFieldContent($fieldName)	{
+		switch($fieldName)
+			{
+			case "title":
+				return $this->internal["currentRow"][$fieldName];
+				break;
+
+			default:
+				return $this->getFieldContent($fieldName);
+				break;
+			}
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$content: ...
+	 * @return	[type]		...
+	 */
+	function listView($content)
+		{
+		$lConf 							= $this->conf['listView.'];	// Local settings for the listView function
+		$strTableClassName	= ($lConf['tableClassName'] ? $lConf['tableClassName'] : 'table');
+
+		// For example - modeselector
+		$this->setInternalVars($strView);
+
+		// A single element should be displayed:
+		if ($this->piVars['showUid'])
+			{
+			$this->internal['currentRow'] = $this->pi_getRecord($this->getTableName(),$this->piVars['showUid']);
+
+			$content = $this->singleView($content);
+			return $content;
+			}
+
+		// Makes default-settings for the modeselector
+		if (!isset($this->piVars['mode']) || !isset($this->internal['modeselector'][$this->piVars['mode']]))
+			{
+			reset($this->internal['modeselector']);	// Use first element of the modeselector-array
+			$this->piVars['mode']= key($this->internal['modeselector']);
+			}
+
+		// Makes the switch von Page1 to Page2
+		if (!isset($this->piVars['pointer']))	$this->piVars['pointer'] = 0;
+
+		// Switch to the first page if mode changes
+		if($this->piVars['mode'] != $this->piVars['oldmode']) $this->piVars['pointer'] = 0;
+		$this->piVars['oldmode'] = $this->piVars['mode'];
+
+		// Initializing the query parameters like results_at_a_time, maxPages, colsOnPage aso.
+		$this->setInternalQueryParameters('listView');
+
+		$strWhereStatement = '';
+
+		// Create a special filter from TS
+		if(is_array($lConf['filter.']))
+			{
+			foreach($lConf['filter.'] as $key => $value)
+				{
+				if($key == 'calendarweek' && $value == 'true') $value = date("W");
+				$strWhereStatement .= "AND $key = '$value'";
+				}
+			}
+
+		// Create WHERE Statement based on the things from the search field (if any...)
+		if(is_array($this->piVars["search"]))
+			{
+			foreach($this->piVars["search"] as $key => $value)
+				{
+				if($value == -1) continue;
+				$strWhereStatement .= "AND $key = '$value'";
+				}
+			}
+
+		// Get number of records:
+		$res = $this->execQuery(1,$strWhereStatement);
+		list($this->internal['res_count']) = $GLOBALS['TYPO3_DB']->sql_fetch_row($res);
+
+		// Make listing query, pass query to SQL database:
+		$res = $this->execQuery(0,$strWhereStatement);
+
+		// Put the whole list together:
+		$fullTable='';	// Clear var;
+		//$fullTable.=t3lib_div::view_array($this->piVars);	// DEBUG: Output the content of $this->piVars for debug purposes. REMEMBER to comment out the IP-lock in the debug() function in t3lib/config_default.php if nothing happens when you un-comment this line!
+
+		// Adds the mode selector.
+		if($lConf['showModeSelector'] == 1 && isset($this->internal['modeselector']) && is_array($this->internal['modeselector']))
+			{
+			foreach($this->internal['modeselector'] as $key => $value)
+				{
+				$this->internal['modeselector'][$key] = $this->pi_getLL('qlist_mode_' . $key,$value);
+				}
+			$fullTable .= $this->pi_list_modeSelector($this->internal['modeselector']);
+			}
+
+		// Adds the whole list table
+		// Bei der erzeugeten Tabelle wird auch der Klassenname angehängt
+		$fullTable .= $this->pi_list_makelist($res,'border="0" cellspacing="0" cellpadding="0"' . $this->pi_classParam($strTableClassName));
+
+		// Adds the search box:
+		if($lConf['showSearchBox'] == 1) $fullTable .= $this->pi_list_searchBox();
+
+		// Adds the result browser:
+		if($lConf['showBrowserResults'] == 1) $fullTable .= $this->pi_list_browseresults();
+
+		// Returns the content from the plugin.
+		return $fullTable;
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$fCountRecords: ...
+	 * @param	[type]		$strWhereStatement: ...
+	 * @return	[type]		...
+	 */
+	function execQuery($fCountRecords = 0,$strWhereStatement = '')
+		{
+		$res = $this->pi_exec_query($this->getTableName(),$fCountRecords,$strWhereStatement);
+
+		if(!$res)
+			{
+			debug(mysql_error());
+			debug($strWhereStatement);
+			}
+
+		return $res;
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$content: ...
+	 * @return	[type]		...
+	 */
+	function singleView($content)	{
+		$this->pi_setPiVarDefaults();
+
+	 	$lConf = $this->conf['singleView.'];	// Local settings for the singleView function
+		$aGETVars 			= t3lib_div::_GET();	// Commandline
+		$aPOSTVars 			= t3lib_div::_POST(); 	// Form
+
+			// This sets the title of the page for use in indexed search results:
+		if ($this->internal['currentRow']['title'])	$GLOBALS['TSFE']->indexedDocTitle=$this->internal['currentRow']['title'];
+
+		$strContent = '';
+		$template 			= $this->_getTemplate('single_view.tmpl');
+		$templateListCol 	= $this->cObj->getSubpart($template,'###LIST_COL###');
+		$templateMarker 	= $this->cObj->getSubpart($template,'###MARKERLINE###');
+
+		$markerArray['###SYS_UID###'] 					= $this->internal["currentRow"]["uid"];
+		$markerArray['###SYS_CURRENTTABLE###'] 	= $this->internal["currentTable"];
+		$markerArray['###SYS_LASTUPDATE###'] 		= date("d-m-Y H:i",$this->internal["currentRow"]["tstamp"]);
+		$markerArray['###SYS_CREATION###'] 			= date("d-m-Y H:i",$this->internal["currentRow"]["crdate"]);
+		$markerArray['###SYS_BACKLINK###'] 			= $this->pi_list_linkSingle($this->pi_getLL("back","Back"),0);
+		$markerArray['###SYS_EDITPANEL###'] 		= $this->pi_getEditPanel();
+		$markerArray['###SYS_ALLFIELDS###']			= '';
+
+		// Reihenfolge der Felder festlegen
+		$aFieldsToDisplay = strlen($lConf['displayOrder']) > 0 ? explode(',',$lConf['displayOrder']) : array_keys($this->internal["currentRow"]);
+
+		// Diese Felder werden ausgeschlossen wenn sie leer oder auf 0 sind
+		$aHideIfEmpty = strlen($lConf['hideIfEmpty']) > 0 ? explode(',',$lConf['hideIfEmpty']) : array();
+		foreach($aHideIfEmpty as $evalue) $aTemp[] = trim($evalue);
+		$aHideIfEmpty = $aTemp;
+
+		$aFieldsToDisplay = array_keys($this->internal["currentRow"]);
+		if(isset($lConf['displayOrder'])) $aFieldsToDisplay = split(',',$lConf['displayOrder']);
+
+		$nCounter = 0;
+		$strColContent = '';
+		foreach($aFieldsToDisplay as $key)
+			{
+			$key = trim($key);
+
+			// Wenn im KEY (also im Feldnamen eine [ vorkommt dann ist das eine Leerzeile
+			if(preg_match('#^\[marker(.*)\]$#',$key,$aMatches)) {
+				$markerMarker['###MARKERTEXT###'] = '&nbsp;';
+				if(isset($aMatches[1]) && trim(strlen($aMatches[1])>0))
+					{
+					$strMarkerLable = trim($aMatches[1]);
+					$markerMarker['###MARKERTEXT###'] = $this->pi_getLL($strMarkerLable,$strMarkerLable);
+					}
+				$strColContent .= $this->cObj->substituteMarkerArray($templateMarker,$markerMarker);
+				continue;
+				}
+
+			$strFieldHeader = $this->getFieldHeader($key);
+
+			// Wenn am Anfang und am Ende des Feldnamens ein [ bzw. ] steht dann ist das normalerweise der interne Name (internes Feld)
+			if(preg_match('#^\[.*\]$#',$strFieldHeader)) continue;
+
+			// Wenn leer und wenn der Status des Feldes auf ausblenden wenn leer
+			if(($this->internal["currentRow"][$key] === '' ||
+				$this->internal["currentRow"][$key] === 0) &&
+				in_array($key,$aHideIfEmpty,true))
+				{
+				//debug("$key ->" . $this->getSingleViewFieldContent($key) . '#' . $this->internal["currentRow"][$key] . '#');
+				continue;
+				}
+
+			$markerArray['###SYS_ALLFIELDS###'] .= $key . ', ';
+			// Die beiden Felder werden auf den selben Wert gezogen da damit
+			// entweder eine Tabelle erstellt werden kann die immer die Selben Zeilen verwendet
+			// sowie eine Tabelle die ein individuelles Layout hat
+			$markerArrayCol['###LABLE###']	= '<div'.$this->pi_classParam('lable ' . 'lable_' . $key).'>' .
+				$strFieldHeader . '</div>';
+
+			$markerArrayCol['###LABLE_' . strtoupper($key) . '###'] = $markerArrayCol['###TITLE###'];
+
+			// Und hier kommen die Feldwerte
+			$markerArrayCol['###FIELD###']	= '<div'.$this->pi_classParam('field ' . 'field_' . $key).'>' .
+				$this->getSingleViewFieldContent($key) . '</div>';
+
+			$markerArrayCol['###FIELD_' .  strtoupper($key) . '###']	= $markerArrayCol['###FIELD###'];
+
+			$markerArrayCol['###COLCLASS###'] = ($nCounter % 2 ? $this->pi_classParam("listcol-odd") : "");
+
+			$strColContent .= $this->cObj->substituteMarkerArray($templateListCol,$markerArrayCol);
+			$nCounter++;
+			}
+
+		if($lConf['showFieldNames']	== 0) $markerArray['###SYS_ALLFIELDS###'] = '';
+
+		//Löschen des Markerblocks - sonst wird dieser am Ende noch 1x angezeigt
+		$template = $this->cObj->substituteSubpart($template,'###MARKERLINE###','');
+
+		// Contents der Spalten wird in den Platzhalter LIST_COL geschrieben
+		$template = $this->cObj->substituteSubpart($template,'###LIST_COL###',$strColContent);
+
+		// Arraykeys von markerArray ersetzen die jeweiligen Platzhalter in $template
+		$template = $this->cObj->substituteMarkerArray($template,$markerArray);
+
+		$strContent = $this->cObj->substituteMarkerArray($template,$markerArrayCol);
+
+		$strContent .= $this->pi_getEditPanel();
+
+		return $strContent;
+		}
+
+	/**
+	 * [Describe function...]
+	 *
+	 * @param	[type]		$local_table: ...
+	 * @param	[type]		$local_uid: ...
+	 * @param	[type]		$select: ...
+	 * @param	[type]		$whereClause: ...
+	 * @param	[type]		$groupBy: ...
+	 * @param	[type]		$orderBy: ...
+	 * @param	[type]		$limit: ...
+	 * @param	[type]		$MM_table: ...
+	 * @return	[type]		...
+	 */
+	function get_mm_fileList($local_table, $local_uid, $select='', $whereClause='', $groupBy='', $orderBy='', $limit=100, $MM_table='tx_dam_mm_ref')
+		{
+		$select = $select ? $select : 'tx_dam.uid, tx_dam.title, tx_dam.file_path, tx_dam.file_name, tx_dam.file_type' ;
+		//debug(tx_dam_db::SELECT_mm_query(
+		//			$select,
+		//			$local_table,
+		//			'tx_dam_mm_ref',
+		//			'tx_dam',
+		//			'AND '.$local_table.'.uid IN ('.$local_uid.') '.$whereClause,
+		//			$groupBy,
+		//			$orderBy,
+		//			$limit
+		//		));
+
+		if(!$orderBy)
+			{
+			$orderBy = $MM_table.'.sorting';
+			}
+
+		$res = $GLOBALS['TYPO3_DB']->exec_SELECT_mm_query(
+			$select,
+			$local_table,
+			$MM_table,
+			'tx_dam',
+			'AND '.$local_table.'.uid IN ('.$local_uid.') '.$whereClause,
+			$groupBy,
+			$orderBy,
+			$limit
+			);
+
+		$files = array();
+		$rows = array();
+		while($row = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($res))
+			{
+			$files[$row['uid']] = $row['file_path'].$row['file_name'];
+			$rows[$row['uid']] = $row;
+			}
+
+		return array('files'=>$files, 'rows'=>$rows);
+		}
+
+		
+	}
+
+?>
